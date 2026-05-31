@@ -1,0 +1,52 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: team1-app-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prom-stack
+spec:
+  groups:
+    - name: team1-app.rules
+      rules:
+        # ── 5xx 에러율 5% 초과 ──────────────────────────────
+        - alert: HighErrorRate
+          expr: |
+            sum(rate(http_server_requests_seconds_count{application="team1-app",status=~"5.."}[5m]))
+            /
+            sum(rate(http_server_requests_seconds_count{application="team1-app"}[5m])) > 0.05
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "team1-app 5xx 에러율 5% 초과"
+            description: "지난 5분 5xx 비율 = {{ $value | humanizePercentage }}"
+            runbook: "kubectl -n team1-dev logs deploy/team1-app --tail=100 으로 에러 확인"
+
+        # ── p95 응답시간 1초 초과 ───────────────────────────
+        - alert: SlowResponseTime
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_server_requests_seconds_bucket{application="team1-app"}[5m]))
+            ) > 1
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "team1-app p95 응답시간 1초 초과"
+            description: "p95 latency = {{ $value }}s"
+            runbook: "HPA/Pod 수, DB connection pool, RDS 부하 점검"
+
+        # ── HikariCP 커넥션 풀 90% 초과 ─────────────────────
+        - alert: HikariCPNearExhausted
+          expr: |
+            max(hikaricp_connections_active{application="team1-app"})
+            /
+            max(hikaricp_connections_max{application="team1-app"}) > 0.9
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "team1-app DB 커넥션 풀 90% 초과"
+            description: "active/max = {{ $value | humanizePercentage }} (풀 고갈 임박)"
+            runbook: "k6 부하 중이면 예상된 동작. 평시 발생 시 쿼리/풀 크기 점검"

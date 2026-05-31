@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: team1-slack
+  namespace: monitoring
+  labels:
+    release: kube-prom-stack
+spec:
+  route:
+    receiver: slack-team1
+    groupBy: ["alertname"]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    matchers:
+      - name: severity
+        matchType: =~
+        value: "warning|critical"
+  receivers:
+    - name: slack-team1
+      slackConfigs:
+        - apiURL:
+            # 웹훅 URL 은 git 에 평문 커밋 금지 → Secret 에서 주입
+            name: alertmanager-slack-webhook # Secret 이름
+            key: url # Secret 안의 key
+          channel: "#alerts" # jc-course-registration 워크스페이스의 alerts 채널
+          sendResolved: true
+          title: "[{{ .CommonLabels.severity }}] {{ .CommonLabels.alertname }}"
+          text: >-
+            {{ range .Alerts }}• {{ .Annotations.summary }}
+            {{ .Annotations.description }}
+            ↳ {{ .Annotations.runbook }}
+            {{ end }}

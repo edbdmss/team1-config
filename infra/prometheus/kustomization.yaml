@@ -6,3 +6,5 @@ namespace: monitoring
 resources:
   - servicemonitor.yaml
   - namespace.yaml
+  - team1-app-alerts.yaml
+  - alertmanager-slack.yaml
