@@ -1,237 +1,348 @@
-# 파트 전체 업무(이윤범/전지훈)
-CI/CD GitOps : GitHub Actions를 이용한 자동 빌드 및 AWS ECR 푸시 자동화. ArgoCD 설치 및 GitOps 저장소 구조 설계
+# team1-config
 
-# 현재 담당(전지훈) 목표 업무
-- GitOps 저장소 구조 설계
-- Kubernetes Deployment/Service 작성
-- Kustomize 환경 구성
-- ArgoCD Project/Application 설정
-- GitOps 배포 환경 구성
+> Team1 수강신청 시스템의 Kubernetes 매니페스트 및 GitOps 배포 구성 저장소
 
-# Team1 GitOps Configuration(현 결과 적용내용)
+## 📌 프로젝트 소개
 
-## 개요
+본 저장소는 Amazon EKS 환경에서 실행되는 수강신청 시스템의 Kubernetes 매니페스트와 GitOps 배포 구성을 관리합니다.
 
-본 저장소는 Team1 애플리케이션의 Kubernetes 배포 설정(GitOps)을 관리하기 위한 저장소입니다.
+| 구분 | 저장소 | 역할 |
+| --- | --- | --- |
+| App | [team1-app](https://github.com/CLD-05/team1-app) | 애플리케이션 소스코드, CI 파이프라인 |
+| Config | [team1-config](https://github.com/CLD-05/team1-config) | Kubernetes 매니페스트, GitOps 배포 구성 |
+| Infra | [team1-infra](https://github.com/CLD-05/team1-infra) | Terraform IaC, AWS 인프라 |
 
-ArgoCD를 사용하여 GitHub 저장소의 변경사항을 감지하고 Kubernetes(EKS)에 자동 배포합니다.
+ArgoCD는 본 저장소를 **Single Source of Truth**로 사용하여 EKS 클러스터와 지속적으로 동기화합니다.
+애플리케이션 배포에 필요한 Deployment, Service, HPA, Secret, ArgoCD Application 설정을 모두 이곳에서 관리합니다.
 
----
+<br>
 
-# 디렉토리 구조
+## 🔄 GitOps 구조
 
+본 프로젝트는 소스코드 저장소와 배포 설정 저장소를 분리한 GitOps 구조를 채택합니다.
+
+```text
+App Repository (team1-app)
+        │
+        │  develop 브랜치 머지 시
+        │  GitHub Actions 자동 실행
+        ▼
+GitHub Actions
+        │
+        │  Docker 빌드 + ECR Push
+        │  kustomization.yaml 이미지 태그 자동 갱신
+        ▼
+Amazon ECR
+        │
+        │  course-service:{github.sha}
+        ▼
+Config Repository (team1-config) ◀── Single Source of Truth
+        │
+        │  변경 감지 (polling / webhook)
+        ▼
+ArgoCD
+        │
+        │  manual sync
+        │  롤링 업데이트
+        ▼
+Amazon EKS (team1-dev 네임스페이스)
 ```
+
+> 소스코드 변경과 배포 설정 변경을 분리함으로써 배포 이력 추적과 롤백이 용이합니다.
+
+<br>
+
+## 📁 디렉토리 구조
+
+```text
 team1-config
 │
-├─ apps
-│  └─ team1-app
-│      ├─ base
-│      │   ├─ deployment.yaml
-│      │   ├─ service.yaml
-│      │   └─ kustomization.yaml
-│      │
-│      └─ overlays
-│          ├─ dev
-│          │   └─ kustomization.yaml
-│          │
-│          └─ prod
-│              └─ kustomization.yaml
+├── apps
+│   └── team1-app
+│       ├── base                        # 공통 매니페스트 (환경 무관)
+│       │   ├── deployment.yaml         # Pod 생성 및 롤링 업데이트
+│       │   ├── service.yaml            # 내부 네트워크 접근점
+│       │   ├── httproute.yaml          # Gateway API 라우팅 규칙
+│       │   ├── keda-scaled.yaml        # KEDA 기반 오토스케일링
+│       │   └── kustomization.yaml      # base 리소스 묶음
+│       │
+│       └── overlays                    # 환경별 설정 오버레이
+│           ├── dev                     # 개발 환경
+│           │   ├── external-secret.yaml    # AWS Secrets Manager 연동
+│           │   └── kustomization.yaml      # 이미지 태그 갱신 대상
+│           └── prod                    # 운영 환경
+│               ├── external-secret.yaml
+│               └── kustomization.yaml
 │
-└─ argocd
-    ├─ application-dev.yaml
-    ├─ application-prod.yaml
-    └─ project.yaml
+├── argocd                              # ArgoCD 구성
+│   ├── project.yaml                    # 배포 권한 범위 정의
+│   ├── application-dev.yaml            # dev 환경 배포 설정
+│   ├── application-prod.yaml           # prod 환경 배포 설정
+│   └── application-monitoring.yaml     # 모니터링 스택 배포 설정
+│
+└── infra                               # 클러스터 수준 인프라 리소스
+    ├── namespace.yaml                  # 네임스페이스 정의
+    ├── gateway-dev.yaml                # dev Gateway 설정
+    ├── gateway-prod.yaml               # prod Gateway 설정
+    └── prometheus                      # Prometheus 스택
+        ├── namespace.yaml
+        ├── kustomization.yaml
+        └── servicemonitor.yaml
 ```
+
+<br>
+
+## ⚙️ Kubernetes 매니페스트 구성
+
+### Deployment (`base/deployment.yaml`)
+애플리케이션 Pod를 생성하고 관리하는 리소스입니다.
+
+| 항목 | 값 |
+| --- | --- |
+| 기본 Replica | 2 |
+| 컨테이너 포트 | 8080 (HTTP), 8081 (Actuator) |
+| CPU Request/Limit | 250m / 500m |
+| Memory Request/Limit | 512Mi / 1Gi |
+| Health Check | `/actuator/health` (port 8081) |
+| 프로파일 | `SPRING_PROFILES_ACTIVE=dev` |
+
+DB 접속 정보 및 JWT Secret은 `team1-secret` (ExternalSecret)에서 주입합니다.
 
 ---
 
-# Kubernetes 리소스 설명
+### Service (`base/service.yaml`)
+Pod 집합에 대한 안정적인 네트워크 엔드포인트를 제공하는 리소스입니다.
+Gateway API(HTTPRoute)가 Service를 대상으로 트래픽을 전달합니다.
 
-## Deployment
+| 항목 | 값 |
+| --- | --- |
+| 타입 | ClusterIP (클러스터 내부 통신) |
+| 포트 | 80 → 8080 |
 
-파일:
+---
 
-```text
-apps/team1-app/base/deployment.yaml
-```
+### HTTPRoute (`base/httproute.yaml`)
+Gateway API를 통해 외부 요청을 애플리케이션 Service로 전달합니다.
+기존 Ingress보다 확장성과 역할 분리가 뛰어난 Kubernetes 차세대 네트워킹 표준을 사용합니다.
 
-애플리케이션 Pod를 생성 및 관리하는 리소스입니다.
+| 항목 | 값 |
+| --- | --- |
+| Gateway | team1-gateway |
+| 경로 | `/` (PathPrefix) |
+| 대상 Service | team1-app:80 |
 
-주요 역할
+---
 
-- 컨테이너 이미지 실행
-- Replica 관리
-- Pod 자동 재생성
-- 롤링 업데이트 수행
+### KEDA ScaledObject (`base/keda-scaled.yaml`)
+CPU 사용률 기반 오토스케일링과 시간 기반 Scheduled Scaling을 함께 적용하여 수강신청 시간대의 급격한 트래픽 증가에 대응합니다.
 
-예시
+| 항목 | 값 |
+| --- | --- |
+| 최소 Pod | 2 |
+| 최대 Pod | 30 |
+| CPU 임계값 | 50% 초과 시 Scale-Out |
+| CoolDown | 300초 |
 
+수강신청 오픈 시간대에 맞춰 사전 Scale-Out 스케줄이 설정되어 있습니다.
+
+| 시간대 | 스케줄 | 목표 Pod |
+| --- | --- | --- |
+| 오전 수강신청 | 09:30 ~ 10:40 (평일) | 15 |
+| 오후 1차 | 13:30 ~ 14:40 (평일) | 15 |
+| 오후 2차 | 15:30 ~ 16:40 (평일) | 15 |
+
+---
+
+### Kustomize 구성
+
+**base** — 공통 리소스 묶음
 ```yaml
-replicas: 1
+resources:
+  - deployment.yaml
+  - service.yaml
+  - keda-scaled.yaml
 ```
 
-Pod 1개를 생성합니다.
+**overlays/dev** — dev 환경 오버레이
+- 네임스페이스: `team1-dev`
+- 이미지 태그: GitHub Actions가 `github.sha`로 자동 갱신
+- ExternalSecret으로 AWS SSM Parameter Store에서 시크릿 주입
 
 ---
 
-## Service
+### ExternalSecret (`overlays/dev/external-secret.yaml`)
+AWS SSM Parameter Store에서 민감 정보를 자동으로 가져와 Kubernetes Secret으로 생성합니다.
 
-파일:
+| Secret Key | SSM 경로 |
+| --- | --- |
+| db-host | `/team1/eks-dev/db-host` |
+| db-username | `/team1/eks-dev/db-username` |
+| db-password | `/team1/eks-dev/db-password` |
+| db-name | `/team1/eks-dev/db-name` |
+| jwt-secret | `/team1/eks-dev/jwt-secret` |
 
-```text
-apps/team1-app/base/service.yaml
-```
+<br>
 
-Pod에 네트워크 접근을 제공하는 리소스입니다.
+## 🔧 ArgoCD 구성
 
-주요 역할
+### Project (`argocd/project.yaml`)
+ArgoCD에서 배포 권한 범위를 정의하는 리소스입니다.
 
-- Pod IP 변경과 무관한 고정 접근점 제공
-- 로드밸런싱
-- 내부 통신 지원
-
----
-
-## Kustomization
-
-파일
-
-```text
-apps/team1-app/base/kustomization.yaml
-apps/team1-app/overlays/dev/kustomization.yaml
-```
-
-Kubernetes YAML을 조합하여 환경별 설정을 관리합니다.
-
-주요 역할
-
-- 여러 YAML 파일 묶음 관리
-- 환경별(dev/prod) 설정 분리
-- 공통 설정 재사용
-
-현재는 dev 환경을 사용합니다.
+| 항목 | 값 |
+| --- | --- |
+| 프로젝트명 | team1-project |
+| 소스 저장소 | https://github.com/CLD-05/team1-config.git |
+| 배포 가능 네임스페이스 | team1-dev, team1-prod, monitoring |
+| 클러스터 리소스 | Namespace 생성 허용 |
 
 ---
 
-# ArgoCD 구성
-
-## Project
-
-파일
-
-```text
-argocd/project.yaml
-```
-
-ArgoCD Project 설정 파일입니다.
-
-주요 역할
-
-- 배포 가능한 저장소 제한
-- 배포 가능한 Namespace 제한
-- 권한 범위 관리
-
----
-
-## Application
-
-파일
-
-```text
-argocd/application-dev.yaml
-argocd/application-prod.yaml
-```
-
+### Application (`argocd/application-dev.yaml`)
 ArgoCD가 실제 배포를 수행하기 위한 설정 파일입니다.
 
-주요 역할.
+| 항목 | 값 |
+| --- | --- |
+| 애플리케이션명 | team1-app-dev |
+| 소스 경로 | `apps/team1-app/overlays/dev` |
+| 대상 브랜치 | main |
+| 배포 네임스페이스 | team1-dev |
+| Sync 방식 | automated (prune + selfHeal) |
+| 네임스페이스 자동 생성 | 활성화 |
 
-- Git 저장소 감시
-- Kubernetes 배포 수행
-- Sync 상태 관리
-- 자동 배포 지원
+> `prune: true` — Git에서 삭제된 리소스는 클러스터에서도 자동 삭제
+> `selfHeal: true` — 클러스터 상태가 Git과 달라지면 자동으로 원복
 
----
+<br>
 
-# GitOps 배포 흐름
+## 🚀 배포 흐름
 
-```text
-개발자
- ↓
-GitHub(team1-config)
- ↓
-ArgoCD 감지
- ↓
-Kubernetes(EKS)
- ↓
-Deployment 적용
- ↓
-Pod 생성
- ↓
-Service 연결
-```
-
-Git 저장소의 변경사항이 발생하면 ArgoCD가 이를 감지하여 Kubernetes 클러스터에 자동 반영합니다.
-
----
-
-# 개발 환경(dev)
-
-현재 프로젝트는 dev 환경 기준으로 구성되어 있습니다.
-+prod추가
-
-설정 위치
+### 전체 흐름
 
 ```text
-apps/team1-app/overlays/dev
-apps/team1-app/overlays/prod
+App Repository (team1-app)
+        │
+        │  develop 브랜치 머지
+        ▼
+GitHub Actions
+        │
+        ├── OIDC 인증 (AWS IAM)
+        ├── Docker 멀티스테이지 빌드
+        ├── ECR Push (course-service:{github.sha})
+        └── kustomization.yaml 이미지 태그 자동 갱신
+        │
+        ▼
+Config Repository (team1-config) ← 현재 저장소
+        │
+        │  변경 감지
+        ▼
+ArgoCD (automated sync)
+        │
+        ├── prune: Git 삭제 리소스 자동 제거
+        └── selfHeal: 클러스터 상태 자동 원복
+        │
+        ▼
+Amazon EKS (team1-dev 네임스페이스)
+        │
+        ├── 롤링 업데이트 (무중단)
+        ├── Readiness Probe 통과 후 트래픽 수신
+        └── 신규 Pod 정상화 → 구 Pod 종료
 ```
 
-향후 운영 환경(prod)이 필요할 경우 다음 구조로 확장 가능합니다.(확장완료)
+### 롤백 방법
 
-```text
-apps/team1-app/overlays
-├─ dev
-└─ prod
-```
+장애 발생 시 이전 버전으로 즉각 롤백할 수 있습니다.
 
----
-
-# 작성자
-
-GitOps 초기 구성
-
-- Deployment 작성
-- Service 작성
-- Kustomization 작성
-- ArgoCD Project 작성
-- ArgoCD Application 작성
-
-# 추가 수정
-kustomization.yaml 부분의
-
+**방법 1 — Config 레포에서 태그 변경**
+```yaml
+# overlays/dev/kustomization.yaml
 images:
-  - name: nginx
-    newName: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/course-service
-    newTag: latest
+  - name: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/team1-app
+    newTag: <이전 정상 커밋 SHA>  # ← 이전 sha로 변경 후 push
+```
 
-해당 부분의 경우 실사용하는 aws계정 아이디로 값을 바꾸고, 태그도 경우에 따라 바꿔줘야할 수 있음
-<<<<<<< HEAD
-=======
+**방법 2 — ArgoCD 대시보드에서 이전 버전으로 Sync**
+ArgoCD UI → team1-app-dev → History → 이전 버전 선택 → Rollback
 
+<br>
 
-# 추가수정 2
+## 🌿 환경 분리 전략
 
-prod추가에 의한 파일 추가
--prod폴더 및 하위파일 kustomization.yaml
--기존 application.yaml파일 구별을 위해 이름 -dev로 변경
--application-prod.yaml 추가
--project.yaml파일 내용 prod적용 위해 일부 변경
-ㅡㅡㅡ
-destinations:
-  - namespace: team1-dev
-    server: https://kubernetes.default.svc
-  - namespace: team1-prod
-    server: https://kubernetes.default.svc
-ㅡㅡㅡ
->>>>>>> 36ad35f (chore: add prod overlay and ArgoCD prod application)
+본 프로젝트는 Kustomize overlay 방식으로 dev/prod 환경을 분리합니다.
+
+### 구조
+
+```text
+apps/team1-app/
+├── base/                   # 공통 설정 (환경 무관)
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── httproute.yaml
+│   └── keda-scaled.yaml
+│
+└── overlays/
+    ├── dev/                # 개발 환경
+    │   ├── kustomization.yaml   (team1-dev 네임스페이스, dev 이미지 태그)
+    │   └── external-secret.yaml (dev SSM 시크릿 경로)
+    └── prod/               # 운영 환경
+        ├── kustomization.yaml   (team1-prod 네임스페이스, prod 이미지 태그)
+        └── external-secret.yaml (prod SSM 시크릿 경로)
+```
+
+### 환경별 차이점
+
+| 항목 | dev | prod |
+| --- | --- | --- |
+| 네임스페이스 | team1-dev | team1-prod |
+| 이미지 태그 | github.sha (자동 갱신) | github.sha (수동 갱신) |
+| SSM 경로 | `/team1/eks-dev/` | `/team1/eks-prod/` |
+| ArgoCD Application | application-dev.yaml | application-prod.yaml |
+| Gateway | gateway-dev.yaml | gateway-prod.yaml |
+
+### base vs overlay 역할
+
+| 구분 | 역할 |
+| --- | --- |
+| base | 환경 무관 공통 리소스 정의 |
+| overlay | 환경별 네임스페이스, 이미지 태그, 시크릿 경로 오버라이드 |
+
+> base를 직접 수정하지 않고 overlay에서만 환경별 차이를 관리하여
+> 코드 중복 없이 다중 환경을 운영합니다.
+
+<br>
+
+## 📋 팀 운영 규칙
+
+### Config 레포 수정 원칙
+
+| 상황 | 방법 |
+| --- | --- |
+| 이미지 태그 갱신 | GitHub Actions 자동 처리 (직접 수정 금지) |
+| 매니페스트 변경 | PR → 팀원 1인 이상 approve → merge |
+| 긴급 롤백 | ArgoCD 대시보드 또는 kustomization.yaml 태그 직접 수정 |
+
+---
+
+### 브랜치 전략
+
+```text
+main  ← 배포 기준 브랜치 (ArgoCD가 추적)
+ └── feature/이름/기능명
+```
+
+- 모든 변경은 `feature/*` 브랜치에서 작업 후 `main`으로 PR
+- approve 없이 main 직접 push 금지
+- GitHub Actions의 자동 태그 갱신은 main에 직접 push (예외)
+
+---
+
+### 주의사항
+
+> ⚠️ `overlays/dev/kustomization.yaml`의 이미지 태그는
+> GitHub Actions가 자동으로 갱신합니다. 직접 수정하면
+> 다음 배포 시 덮어씌워집니다.
+
+> ⚠️ ArgoCD `selfHeal: true` 설정으로 인해 클러스터에서
+> 직접 수정한 리소스는 자동으로 Git 상태로 원복됩니다.
+> 영구 변경은 반드시 Config 레포를 통해 진행하세요.
+
+---
