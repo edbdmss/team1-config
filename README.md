@@ -6,14 +6,14 @@
 
 본 저장소는 Amazon EKS 환경에서 실행되는 수강신청 시스템의 Kubernetes 매니페스트와 GitOps 배포 구성을 관리합니다.
 
+ArgoCD는 본 저장소를 **Single Source of Truth**로 사용하여 EKS 클러스터와 지속적으로 동기화합니다.
+애플리케이션 배포에 필요한 Deployment, Service, HPA, Secret, ArgoCD Application 설정을 모두 이곳에서 관리합니다.
+
 | 구분 | 저장소 | 역할 |
 | --- | --- | --- |
 | App | [team1-app](https://github.com/CLD-05/team1-app) | 애플리케이션 소스코드, CI 파이프라인 |
 | Config | [team1-config](https://github.com/CLD-05/team1-config) | Kubernetes 매니페스트, GitOps 배포 구성 |
 | Infra | [team1-infra](https://github.com/CLD-05/team1-infra) | Terraform IaC, AWS 인프라 |
-
-ArgoCD는 본 저장소를 **Single Source of Truth**로 사용하여 EKS 클러스터와 지속적으로 동기화합니다.
-애플리케이션 배포에 필요한 Deployment, Service, HPA, Secret, ArgoCD Application 설정을 모두 이곳에서 관리합니다.
 
 <br>
 
