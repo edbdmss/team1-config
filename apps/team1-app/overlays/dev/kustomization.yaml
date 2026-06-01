@@ -9,4 +9,4 @@ resources:
 images:
 - name: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/team1-app
   newName: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/team1-app
-  newTag: 0fa573b0be4c211dd79d266f3f929cd8efb7fdc4
+  newTag: 9c9847ba6b52d48453b56ec3754b64691d3dcbd2
