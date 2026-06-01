@@ -2,9 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: team1-app
-  namespace: default
+  namespace: default # 그대로 — overlay가 team1-dev로 remap
 spec:
-  replicas: 2
+  # replicas 줄 삭제 (KEDA가 소유 → ArgoCD와 충돌 제거)
   selector:
     matchLabels:
       app: team1-app
@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: team1-app
-          image: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/team1-app:latest
+          image: 495599735720.dkr.ecr.ap-northeast-2.amazonaws.com/team1-app:latest # 그대로 — overlay가 SHA 태그로 덮음
           ports:
             - containerPort: 8080
             - containerPort: 8081
@@ -28,45 +28,32 @@ spec:
               value: "jdbc:mysql://team1-rds-primary.cne4w2cys26c.ap-northeast-2.rds.amazonaws.com:3306/course_registration"
             - name: DB_USERNAME
               valueFrom:
-                secretKeyRef:
-                  name: team1-secret
-                  key: db-username
+                { secretKeyRef: { name: team1-secret, key: db-username } }
             - name: DB_PASSWORD
               valueFrom:
-                secretKeyRef:
-                  name: team1-secret
-                  key: db-password
+                { secretKeyRef: { name: team1-secret, key: db-password } }
             - name: JWT_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: team1-secret
-                  key: jwt-secret
+                { secretKeyRef: { name: team1-secret, key: jwt-secret } }
           resources:
             requests:
-              cpu: "250m"
+              cpu: "500m" # 250m → 500m (Pod 분산 + 부팅 CPU 확보)
               memory: "512Mi"
             limits:
-              cpu: "500m"
+              cpu: "2" # 500m → 2 (JVM 기동 CPU throttle 제거 ★핵심)
               memory: "1Gi"
           startupProbe:
-            httpGet:
-              path: /actuator/health
-              port: 8081
-            failureThreshold: 30
-            periodSeconds: 2
+            httpGet: { path: /actuator/health, port: 8081 }
+            failureThreshold: 30 # 30 × 10s = 300초(5분) 부팅 여유
+            periodSeconds: 10 # 2 → 10
+            timeoutSeconds: 5 # 1 → 5 (부하 때 1초는 너무 빡빡)
           readinessProbe:
-            httpGet:
-              path: /actuator/health
-              port: 8081
-            initialDelaySeconds: 60
+            httpGet: { path: /actuator/health, port: 8081 }
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
-            httpGet:
-              path: /actuator/health
-              port: 8081
-            initialDelaySeconds: 60
+            httpGet: { path: /actuator/health, port: 8081 }
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
