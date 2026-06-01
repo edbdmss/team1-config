@@ -48,12 +48,12 @@ spec:
             periodSeconds: 10 # 2 → 10
             timeoutSeconds: 5 # 1 → 5 (부하 때 1초는 너무 빡빡)
           readinessProbe:
-            httpGet: { path: /actuator/health, port: 8081 }
+            httpGet: { path: /actuator/health/readiness, port: 8081 } # ← /readiness (DB 불가 시 트래픽만 차단)
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
-            httpGet: { path: /actuator/health, port: 8081 }
+            httpGet: { path: /actuator/health/liveness, port: 8081 } # ← /liveness (DB 무관, 부하 때 멀쩡한 Pod 안 죽임)
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
